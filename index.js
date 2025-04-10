@@ -20,7 +20,7 @@ import { openGroupChat } from "../../../group-chats.js";
 import { renameChat } from "../../../../script.js";
 
 // 插件名称
-const PLUGIN_NAME = 'star3';
+const PLUGIN_NAME = 'star2';
 
 // 创建一个辅助函数来确保存在必要的数据结构
 function ensureFavoritesArrayExists() {
@@ -468,33 +468,24 @@ async function handleClearInvalidFavorites() {
 
 // --- 预览功能 ---
 
-// 直接使用当前选中的角色或群组获取预览键
-function getPreviewKey() {
-    // 优先使用全局变量，而不是context中的ID
-    const characterId = this_chid;
-    const groupId = selected_group;
+// 确保预览聊天的数据存在
+function ensurePreviewData() {
+    // 获取当前聊天和角色/群组信息
+    const context = getContext();
+    const chatId = context.chatId;
+    const characterId = context.characterId;
+    const groupId = context.groupId;
     
-    console.log(`[${PLUGIN_NAME}] 当前角色ID: ${characterId}, 当前群组ID: ${groupId}`);
-    
-    // 创建预览键
-    const previewKey = groupId ? `group_${groupId}` : `char_${characterId}`;
-    
-    console.log(`[${PLUGIN_NAME}] 生成的预览键: ${previewKey}`);
+    // 确保预览聊天ID存储位置存在
+    if (!extension_settings[PLUGIN_NAME].previewChats) {
+        extension_settings[PLUGIN_NAME].previewChats = {};
+    }
     
     return {
-        previewKey,
+        chatId,
         characterId,
         groupId
     };
-}
-
-// 异步保存设置
-async function saveSettingsAsync() {
-    return new Promise((resolve) => {
-        saveSettingsDebounced();
-        // 给设置保存一些时间
-        setTimeout(resolve, 500);
-    });
 }
 
 // 处理预览按钮点击
@@ -523,13 +514,7 @@ async function handlePreviewButtonClick() {
         
         // 获取当前上下文和收藏数据
         const context = getContext();
-        const { previewKey, characterId, groupId } = getPreviewKey();
-        
-        // 确保预览聊天存储结构存在
-        if (!extension_settings[PLUGIN_NAME].previewChats) {
-            extension_settings[PLUGIN_NAME].previewChats = {};
-            await saveSettingsAsync();
-        }
+        const { chatId, characterId, groupId } = ensurePreviewData();
         
         // 获取收藏项列表
         const { chatSettings } = ensureFavoritesArrayExists();
@@ -547,9 +532,8 @@ async function handlePreviewButtonClick() {
         console.log(`[${PLUGIN_NAME}] 原始聊天总消息数: ${originalChat.length}`);
         
         // 检查是否已经有预览聊天ID
+        const previewKey = groupId ? `group_${groupId}` : `char_${characterId}`;
         const existingPreviewChatId = extension_settings[PLUGIN_NAME].previewChats[previewKey];
-        
-        console.log(`[${PLUGIN_NAME}] 预览键 ${previewKey} 对应的聊天ID: ${existingPreviewChatId || '未找到'}`);
         
         let isFirstPreview = false;
         
@@ -559,33 +543,15 @@ async function handlePreviewButtonClick() {
             // 切换到现有预览聊天
             if (groupId) {
                 console.log(`[${PLUGIN_NAME}] 正在切换到群组预览聊天...`);
-                try {
-                    await openGroupChat(groupId, existingPreviewChatId);
-                    console.log(`[${PLUGIN_NAME}] 成功切换到群组预览聊天`);
-                } catch (e) {
-                    console.error(`[${PLUGIN_NAME}] 切换到群组预览聊天失败:`, e);
-                    // 如果切换失败，可能是聊天ID无效，需要创建新聊天
-                    isFirstPreview = true;
-                }
+                await openGroupChat(groupId, existingPreviewChatId);
             } else {
                 console.log(`[${PLUGIN_NAME}] 正在切换到角色预览聊天...`);
-                try {
-                    await openCharacterChat(characterId, existingPreviewChatId);
-                    console.log(`[${PLUGIN_NAME}] 成功切换到角色预览聊天`);
-                } catch (e) {
-                    console.error(`[${PLUGIN_NAME}] 切换到角色预览聊天失败:`, e);
-                    // 如果切换失败，可能是聊天ID无效，需要创建新聊天
-                    isFirstPreview = true;
-                }
+                await openCharacterChat(characterId, existingPreviewChatId);
             }
         } else {
             console.log(`[${PLUGIN_NAME}] 未找到预览聊天ID，将创建新聊天`);
             isFirstPreview = true;
-        }
-        
-        // 如果需要创建新聊天(首次预览或切换失败)
-        if (isFirstPreview) {
-            console.log(`[${PLUGIN_NAME}] 创建新的预览聊天...`);
+            
             // 创建新聊天并切换
             await doNewChat({ deleteCurrentChat: false });
             
@@ -599,24 +565,14 @@ async function handlePreviewButtonClick() {
                 return;
             }
             
-            console.log(`[${PLUGIN_NAME}] 新创建的预览聊天ID: ${newPreviewChatId}`);
-            
-            // 立即重命名聊天
-            try {
-                console.log(`[${PLUGIN_NAME}] 尝试重命名聊天为<预览聊天>...`);
-                await renameChat("<预览聊天>");
-                console.log(`[${PLUGIN_NAME}] 聊天已重命名为<预览聊天>`);
-            } catch (e) {
-                console.warn(`[${PLUGIN_NAME}] 重命名聊天失败:`, e);
-            }
+            console.log(`[${PLUGIN_NAME}] 新聊天ID: ${newPreviewChatId}`);
             
             // 将新聊天ID保存为预览聊天
             extension_settings[PLUGIN_NAME].previewChats[previewKey] = newPreviewChatId;
-            console.log(`[${PLUGIN_NAME}] 已将预览聊天ID ${newPreviewChatId} 保存到键 ${previewKey}`);
+            saveSettingsDebounced();
             
-            // 立即同步保存设置
-            await saveSettingsAsync();
-            console.log(`[${PLUGIN_NAME}] 预览聊天ID设置已保存`);
+            // 首次预览不立即重命名，等填充消息后再重命名
+            console.log(`[${PLUGIN_NAME}] 首次预览，将在填充消息后重命名聊天`);
         }
         
         // 延迟一下确保聊天加载完成
@@ -646,6 +602,13 @@ async function handlePreviewButtonClick() {
                 
                 // 记录原始的mesid
                 messageCopy.original_mesid = messageId;
+
+                if (!messageCopy.extra) {
+                messageCopy.extra = {};
+                }
+                if (!messageCopy.extra.swipes) {
+                messageCopy.extra.swipes = [];
+                }
                 
                 messagesToFill.push({
                     message: messageCopy,
@@ -669,6 +632,7 @@ async function handlePreviewButtonClick() {
         
         // 填充消息到聊天
         let addedCount = 0;
+        let hasRenamed = !isFirstPreview; // 如果不是首次预览，就不需要重命名
         
         for (const item of messagesToFill) {
             try {
@@ -682,6 +646,21 @@ async function handlePreviewButtonClick() {
                     scroll: true,
                     forceId: mesid
                 });
+                
+                // 首条消息添加成功后进行重命名（仅首次预览需要）
+                if (addedCount === 0 && isFirstPreview && !hasRenamed) {
+                    try {
+                        // 等待一段时间后再尝试重命名
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        console.log(`[${PLUGIN_NAME}] 尝试重命名聊天为<预览聊天>...`);
+                        await renameChat("<预览聊天>");
+                        hasRenamed = true;
+                        console.log(`[${PLUGIN_NAME}] 聊天已重命名为<预览聊天>`);
+                    } catch (renameError) {
+                        console.warn(`[${PLUGIN_NAME}] 重命名聊天失败，将继续填充消息:`, renameError);
+                        // 即使重命名失败也继续填充
+                    }
+                }
                 
                 // 在消息之间添加短暂延迟，确保顺序正确
                 await new Promise(resolve => setTimeout(resolve, 100));
